@@ -5,7 +5,7 @@
 int main()
 {
     // Create job sytem with 4 worker threas
-    taskori::JobSystem js(4);
+    taskori::Scheduler js(4);
 
     // Submit jobs
     js.Submit([] {

@@ -7,9 +7,9 @@
 using namespace taskori;
 
 // Test: Submitted jobs are executed
-TEST(JobSystemTest, BasicExecution) 
+TEST(SchedulerTest, BasicExecution) 
 {
-    JobSystem js(4);
+    Scheduler js(4);
     std::atomic<int> counter = 0;
 
     js.Submit([&] { counter++; });
@@ -20,9 +20,9 @@ TEST(JobSystemTest, BasicExecution)
 }
 
 // Test: WaitAll blocks until jobs are finished
-TEST(JobSystemTest, WaitAllBlocksUntilJobsDone) 
+TEST(SchedulerTest, WaitAllBlocksUntilJobsDone) 
 {
-    JobSystem js(2);
+    Scheduler js(2);
     std::atomic<bool> jobFinished = false;
 
     js.Submit([&] {
@@ -35,9 +35,9 @@ TEST(JobSystemTest, WaitAllBlocksUntilJobsDone)
 }
 
 // Test: Execute multiple jobs in parallel
-TEST(JobSystemTest, MultipleJobsExecution) 
+TEST(SchedulerTest, MultipleJobsExecution) 
 {
-    JobSystem js(4);
+    Scheduler js(4);
     std::atomic<int> counter = 0;
     int totalJobs = 100;
 
@@ -51,9 +51,9 @@ TEST(JobSystemTest, MultipleJobsExecution)
 }
 
 // Test: No jobs should execute after shutdown
-TEST(JobSystemTest, NoJobsAfterShutdown) 
+TEST(SchedulerTest, NoJobsAfterShutdown) 
 {
-    JobSystem js(2);
+    Scheduler js(2);
     js.Shutdown();
 
     bool jobExecuted = false;
@@ -64,9 +64,9 @@ TEST(JobSystemTest, NoJobsAfterShutdown)
 }
 
 // Test: Thread-safe counter under heavy load
-TEST(JobSystemTest, ThreadSafeCounter) 
+TEST(SchedulerTest, ThreadSafeCounter) 
 {
-    JobSystem js(4);
+    Scheduler js(4);
     std::atomic<int> counter = 0;
     int totalJobs = 1000;
 
@@ -80,9 +80,9 @@ TEST(JobSystemTest, ThreadSafeCounter)
 }
 
 // Test: WaitAll behaves correctly on empty queue
-TEST(JobSystemTest, WaitAllWithNoJobs) 
+TEST(SchedulerTest, WaitAllWithNoJobs) 
 {
-    JobSystem js(2);
+    Scheduler js(2);
     EXPECT_NO_THROW(js.WaitAll());
 }
 

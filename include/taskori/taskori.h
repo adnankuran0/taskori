@@ -8,6 +8,7 @@
 #include <queue>
 #include <vector>
 #include <atomic>
+#include <future>
 
 //TODO:
 //Queue → priority queue / multiple queues
@@ -18,22 +19,29 @@
 
 namespace taskori {
 
-class JobSystem
+class Scheduler
 {
 public:
 	using Job = std::function<void()>;
+
+	struct JobEntry
+	{
+		Job job;
+		int priority = 0; // 0=low 1=medium 2=high
+		std::promise<void> promise;
+	};
 
 	/// <summary>
 	/// Create worker threads
 	/// </summary>
 	/// <param name="workerCount">Number of the worker threads to be created</param>
-	explicit JobSystem(unsigned int workerCount = std::thread::hardware_concurrency())
+	explicit Scheduler(unsigned int workerCount = std::thread::hardware_concurrency())
 		: m_Stop(false), m_ActiveJobCount(0), m_WorkerCount(workerCount)
 	{
 		Start(m_WorkerCount);
 	}
 
-	~JobSystem()
+	~Scheduler()
 	{
 		Shutdown();
 	}
@@ -42,13 +50,16 @@ public:
 	/// Submit a job to the system
 	/// </summary>
 	/// <param name="job">Function to worker execute</param>
-	inline void Submit(Job job) noexcept
+	inline std::future<void> Submit(Job job, int priority = 0) noexcept
 	{
+		std::promise<void> p;
+		auto future = p.get_future();
 		{
-			std::unique_lock<std::mutex> lock(m_QueueMutex);
-			m_JobQueue.push(std::move(job));
+			std::unique_lock<std::mutex> lock(m_Mutex);
+			m_JobQueue.push(JobEntry{ std::move(job), priority, std::move(p) });
 		}
 		m_Condition.notify_one();
+		return future;
 	}
 
 	/// <summary>
@@ -56,7 +67,7 @@ public:
 	/// </summary>
 	inline void WaitAll() noexcept
 	{
-		std::unique_lock<std::mutex> lock(m_QueueMutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 		m_Condition.wait(lock, [this] {
 			return m_JobQueue.empty() && m_ActiveJobCount.load() == 0; });
 	}
@@ -69,7 +80,7 @@ public:
 	inline void Shutdown() noexcept
 	{
 		{
-			std::unique_lock<std::mutex> lock(m_QueueMutex);
+			std::unique_lock<std::mutex> lock(m_Mutex);
 			m_Stop = true;
 		}
 		m_Condition.notify_all();
@@ -83,6 +94,14 @@ public:
 	}
 
 private:
+	struct CompareJob
+	{
+		bool operator()(const JobEntry& a, const JobEntry& b)
+		{
+			return a.priority < b.priority;
+		}
+	};
+
 	inline void Start(unsigned int workerCount)
 	{
 		for (unsigned int i = 0; i < workerCount; i++)
@@ -91,31 +110,38 @@ private:
 		}
 	}
 
-	void Work() noexcept
+	void Work() 
 	{
-		while (true)
+		while (true) 
 		{
-			Job job;
+			JobEntry jobEntry;
 			{
-				std::unique_lock<std::mutex> lock(m_QueueMutex);
-				m_Condition.wait(lock, [this] { return !m_JobQueue.empty() || m_Stop; });
+				std::unique_lock<std::mutex> lock(m_Mutex);
+				m_Condition.wait(lock, [this] 
+					{
+					return !m_JobQueue.empty() || m_Stop;
+					});
+
 				if (m_Stop && m_JobQueue.empty())
 					return;
 
-				job = std::move(m_JobQueue.front());
+				jobEntry = std::move(const_cast<JobEntry&>(m_JobQueue.top()));
 				m_JobQueue.pop();
+				m_ActiveJobCount++;
 			}
-			m_ActiveJobCount++;
-			job();
+
+			jobEntry.job();
+			jobEntry.promise.set_value(); // signal future completion
+
 			m_ActiveJobCount--;
 			m_Condition.notify_all();
 		}
 	}
 
 	unsigned int m_WorkerCount;
-	std::queue<Job> m_JobQueue;
+	std::priority_queue<JobEntry, std::vector<JobEntry>, CompareJob> m_JobQueue;
 	std::vector<std::thread> m_Workers;
-	std::mutex m_QueueMutex;
+	std::mutex m_Mutex;
 	std::condition_variable m_Condition;
 	std::atomic<bool> m_Stop;
 	std::atomic<int> m_ActiveJobCount;
