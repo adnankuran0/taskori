@@ -2,26 +2,29 @@
 #include <iostream>
 #include <chrono>
 
-int main()
-{
-    // Create job sytem with 4 worker threas
-    taskori::Scheduler js(4);
+int main() {
+    taskori::Scheduler sched(4);
 
-    // Submit jobs
-    js.Submit([] {
-        std::cout << "Job 1 executed!" << std::endl;
+    auto job1 = sched.Submit([] {
+        std::cout << "Job 1 running\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }, 1);
+
+    auto job2 = sched.Submit([] {
+        std::cout << "Job 2 running\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }, 2, { job1 }); // job1 baðýmlýlýðý
+
+    auto job3 = sched.Submit([] {
+        std::cout << "Job 3 running\n";
+        }, 3, { job1, job2 });
+
+    auto job4 = sched.Submit([] {
+        std::cout << "Job 4 running\n";
         });
 
-    js.Submit([] {
-        std::cout << "Job 2 executed!" << std::endl;
-        });
+    sched.WaitAll();
 
-    // Wait all the jobs are done
-    js.WaitAll();
-
-    std::cout << "All the jobs are completed." << std::endl;
-
-    // Wait and exit
-    js.Shutdown();
-
+    std::cout << "All jobs completed!\n";
+    return 0;
 }

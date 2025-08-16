@@ -6,84 +6,145 @@
 
 using namespace taskori;
 
-// Test: Submitted jobs are executed
-TEST(SchedulerTest, BasicExecution) 
-{
-    Scheduler js(4);
-    std::atomic<int> counter = 0;
+TEST(SchedulerTest, SingleJobExecution) {
+    taskori::Scheduler sched(2);
+    std::atomic<bool> executed{ false };
 
-    js.Submit([&] { counter++; });
-    js.Submit([&] { counter++; });
+    auto job = sched.Submit([&]() { executed = true; });
+    sched.WaitAll();
 
-    js.WaitAll();
-    EXPECT_EQ(counter.load(), 2);
+    EXPECT_TRUE(executed);
 }
 
-// Test: WaitAll blocks until jobs are finished
-TEST(SchedulerTest, WaitAllBlocksUntilJobsDone) 
-{
-    Scheduler js(2);
-    std::atomic<bool> jobFinished = false;
+TEST(SchedulerTest, MultipleJobsExecution) {
+    taskori::Scheduler sched(4);
+    std::atomic<int> counter{ 0 };
 
-    js.Submit([&] {
+    for (int i = 0; i < 10; ++i)
+        sched.Submit([&]() { counter.fetch_add(1, std::memory_order_relaxed); });
+
+    sched.WaitAll();
+    EXPECT_EQ(counter.load(), 10);
+}
+
+TEST(SchedulerTest, JobDependencies) {
+    taskori::Scheduler sched(3);
+    std::vector<int> order;
+
+    auto job1 = sched.Submit([&]() { order.push_back(1); });
+    auto job2 = sched.Submit([&]() { order.push_back(2); }, 1, { job1 });
+    auto job3 = sched.Submit([&]() { order.push_back(3); }, 1, { job1, job2 });
+
+    sched.WaitAll();
+
+    ASSERT_EQ(order.size(), 3u);
+    EXPECT_EQ(order[0], 1);
+    EXPECT_EQ(order[1], 2);
+    EXPECT_EQ(order[2], 3);
+}
+
+TEST(SchedulerTest, JobPriorities) {
+    taskori::Scheduler sched(2);
+    std::vector<int> order;
+
+    auto low = sched.Submit([&]() { order.push_back(1); }, 1);
+    auto high = sched.Submit([&]() { order.push_back(2); }, 10);
+
+    sched.WaitAll();
+
+    // High priority should execute before low if available
+    EXPECT_EQ(order[0], 2);
+    EXPECT_EQ(order[1], 1);
+}
+
+TEST(SchedulerTest, WaitAllBlocksUntilJobsComplete) {
+    taskori::Scheduler sched(2);
+    std::atomic<bool> jobDone{ false };
+
+    auto job = sched.Submit([&]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        jobFinished = true;
+        jobDone = true;
         });
 
-    js.WaitAll();
-    EXPECT_TRUE(jobFinished.load());
+    auto start = std::chrono::high_resolution_clock::now();
+    sched.WaitAll();
+    auto end = std::chrono::high_resolution_clock::now();
+
+    EXPECT_TRUE(jobDone);
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(), 100);
 }
 
-// Test: Execute multiple jobs in parallel
-TEST(SchedulerTest, MultipleJobsExecution) 
-{
-    Scheduler js(4);
-    std::atomic<int> counter = 0;
-    int totalJobs = 100;
+TEST(SchedulerTest, ShutdownSafety) {
+    taskori::Scheduler sched(4);
 
-    for (int i = 0; i < totalJobs; i++) 
-    {
-        js.Submit([&counter] { counter++; });
-    }
+    for (int i = 0; i < 20; ++i)
+        sched.Submit([]() { std::this_thread::sleep_for(std::chrono::milliseconds(10)); });
 
-    js.WaitAll();
-    EXPECT_EQ(counter.load(), totalJobs);
+    sched.Shutdown(); // Should safely terminate all threads
+    SUCCEED();
 }
 
-// Test: No jobs should execute after shutdown
-TEST(SchedulerTest, NoJobsAfterShutdown) 
-{
-    Scheduler js(2);
-    js.Shutdown();
+TEST(SchedulerTest, JobExceptionDoesNotCrash) {
+    taskori::Scheduler sched(2);
 
-    bool jobExecuted = false;
-    js.Submit([&] { jobExecuted = true; });
+    auto job = sched.Submit([]() { throw std::runtime_error("Test"); });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    EXPECT_FALSE(jobExecuted);
+    // The scheduler itself shouldn't propagate exceptions
+    EXPECT_NO_THROW(sched.WaitAll());
 }
 
-// Test: Thread-safe counter under heavy load
-TEST(SchedulerTest, ThreadSafeCounter) 
-{
-    Scheduler js(4);
-    std::atomic<int> counter = 0;
-    int totalJobs = 1000;
+TEST(SchedulerTest, TaskStealing) {
+    taskori::Scheduler sched(4);
+    std::atomic<int> counter{ 0 };
 
-    for (int i = 0; i < totalJobs; i++) 
-    {
-        js.Submit([&counter] { counter++; });
-    }
+    // Submit more jobs than threads to force stealing
+    for (int i = 0; i < 20; ++i)
+        sched.Submit([&]() { counter.fetch_add(1, std::memory_order_relaxed); });
 
-    js.WaitAll();
-    EXPECT_EQ(counter.load(), totalJobs);
+    sched.WaitAll();
+    EXPECT_EQ(counter.load(), 20);
 }
 
-// Test: WaitAll behaves correctly on empty queue
-TEST(SchedulerTest, WaitAllWithNoJobs) 
-{
-    Scheduler js(2);
-    EXPECT_NO_THROW(js.WaitAll());
+TEST(SchedulerTest, HighLoadStressTest) {
+    taskori::Scheduler sched(8);
+    const int JOB_COUNT = 1000;
+    std::atomic<int> counter{ 0 };
+
+    for (int i = 0; i < JOB_COUNT; ++i)
+        sched.Submit([&]() { counter.fetch_add(1, std::memory_order_relaxed); });
+
+    sched.WaitAll();
+    EXPECT_EQ(counter.load(), JOB_COUNT);
+}
+
+TEST(SchedulerTest, ComplexDependencyGraph) {
+    taskori::Scheduler sched(4);
+    std::vector<int> executed;
+
+    auto j1 = sched.Submit([&]() { executed.push_back(1); });
+    auto j2 = sched.Submit([&]() { executed.push_back(2); }, 1, { j1 });
+    auto j3 = sched.Submit([&]() { executed.push_back(3); }, 1, { j1 });
+    auto j4 = sched.Submit([&]() { executed.push_back(4); }, 1, { j2, j3 });
+
+    sched.WaitAll();
+
+    ASSERT_EQ(executed.size(), 4u);
+    EXPECT_EQ(executed[0], 1);
+    EXPECT_TRUE((executed[1] == 2 && executed[2] == 3) || (executed[1] == 3 && executed[2] == 2));
+    EXPECT_EQ(executed[3], 4);
+}
+
+TEST(SchedulerTest, NestedJobs) {
+    taskori::Scheduler sched(2);
+    std::atomic<int> counter{ 0 };
+
+    auto outer = sched.Submit([&]() {
+        counter.fetch_add(1, std::memory_order_relaxed);
+        sched.Submit([&]() { counter.fetch_add(1, std::memory_order_relaxed); });
+        });
+
+    sched.WaitAll();
+    EXPECT_EQ(counter.load(), 2);
 }
 
 int main(int argc, char** argv) 

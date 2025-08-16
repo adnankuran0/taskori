@@ -9,148 +9,196 @@
 #include <vector>
 #include <atomic>
 #include <future>
-
-//TODO:
-//Queue → priority queue / multiple queues
-//Job → dependency graph + optional priority
-//Workers → affinity / frame - sliced update
-//Submit → future or callback support
-//Monitor → job profiling and debugging
+#include <memory>
+#include <random>
 
 namespace taskori {
 
-class Scheduler
+class Scheduler 
 {
 public:
-	using Job = std::function<void()>;
+    using Job = std::function<void()>;
 
-	struct JobEntry
-	{
-		Job job;
-		int priority = 0; // 0=low 1=medium 2=high
-		std::promise<void> promise;
-	};
+    struct JobEntry 
+    {
+        Job job;
+        int priority = 0;
+        std::atomic<int> remainingDeps{ 0 };
+        std::vector<std::shared_ptr<JobEntry>> dependents;
+        std::promise<void> promise;
+        std::atomic<bool> finished{ false };
+        std::mutex depMutex; // dependents thread-safe
+    };
 
-	/// <summary>
-	/// Create worker threads
-	/// </summary>
-	/// <param name="workerCount">Number of the worker threads to be created</param>
-	explicit Scheduler(unsigned int workerCount = std::thread::hardware_concurrency())
-		: m_Stop(false), m_ActiveJobCount(0), m_WorkerCount(workerCount)
-	{
-		Start(m_WorkerCount);
-	}
+    explicit Scheduler(unsigned int workerCount = std::thread::hardware_concurrency())
+        : m_Stop(false), m_ActiveJobCount(0), m_WorkerCount(workerCount)
+    {
+        m_Queues.resize(workerCount);
+        for (unsigned int i = 0; i < workerCount; i++)
+            m_QueueMutexes.emplace_back(std::make_unique<std::mutex>());
+        Start(workerCount);
+    }
 
-	~Scheduler()
-	{
-		Shutdown();
-	}
+    ~Scheduler() 
+    {
+        Shutdown();
+    }
 
-	/// <summary>
-	/// Submit a job to the system
-	/// </summary>
-	/// <param name="job">Function to worker execute</param>
-	inline std::future<void> Submit(Job job, int priority = 0) noexcept
-	{
-		std::promise<void> p;
-		auto future = p.get_future();
-		{
-			std::unique_lock<std::mutex> lock(m_Mutex);
-			m_JobQueue.push(JobEntry{ std::move(job), priority, std::move(p) });
-		}
-		m_Condition.notify_one();
-		return future;
-	}
+    std::shared_ptr<JobEntry> Submit(Job job, int priority = 0,
+        std::vector<std::shared_ptr<JobEntry>> deps = {}) noexcept
+    {
+        auto entry = std::make_shared<JobEntry>();
+        entry->job = std::move(job);
+        entry->priority = priority;
+        entry->remainingDeps = static_cast<int>(deps.size());
 
-	/// <summary>
-	/// Wait until all submitted jobs are done
-	/// </summary>
-	inline void WaitAll() noexcept
-	{
-		std::unique_lock<std::mutex> lock(m_Mutex);
-		m_Condition.wait(lock, [this] {
-			return m_JobQueue.empty() && m_ActiveJobCount.load() == 0; });
-	}
+        for (auto& dep : deps) 
+        {
+            std::lock_guard<std::mutex> lock(dep->depMutex);
+            dep->dependents.push_back(entry);
+        }
 
+        if (entry->remainingDeps == 0)
+            Enqueue(entry);
 
+        return entry;
+    }
 
-	/// <summary>
-	/// Stop all workers and clean up
-	/// </summary>
-	inline void Shutdown() noexcept
-	{
-		{
-			std::unique_lock<std::mutex> lock(m_Mutex);
-			m_Stop = true;
-		}
-		m_Condition.notify_all();
+    std::future<void> GetFuture(std::shared_ptr<JobEntry> entry) 
+    {
+        return entry->promise.get_future();
+    }
 
-		for (auto& worker : m_Workers)
-		{
-			if (worker.joinable())
-				worker.join();
-		}
-		m_Workers.clear();
-	}
+    void WaitAll() noexcept 
+    {
+        std::unique_lock<std::mutex> lock(m_GlobalMutex);
+        m_GlobalCondition.wait(lock, [this] {
+            return m_ActiveJobCount.load() == 0 && AllQueuesEmpty();
+            });
+    }
+
+    void Shutdown() noexcept 
+    {
+        m_Stop = true;
+        m_GlobalCondition.notify_all();
+
+        for (auto& worker : m_Workers)
+            if (worker.joinable())
+                worker.join();
+
+        m_Workers.clear();
+    }
 
 private:
-	struct CompareJob
-	{
-		bool operator()(const JobEntry& a, const JobEntry& b)
-		{
-			return a.priority < b.priority;
-		}
-	};
+    struct CompareJob 
+    {
+        bool operator()(const std::shared_ptr<JobEntry>& a,
+            const std::shared_ptr<JobEntry>& b) const noexcept
+        {
+            return a->priority < b->priority;
+        }
+    };
 
-	inline void Start(unsigned int workerCount)
-	{
-		for (unsigned int i = 0; i < workerCount; i++)
-		{
-			m_Workers.emplace_back([this] { Work(); });
-		}
-	}
+    using QueueType = std::priority_queue<std::shared_ptr<JobEntry>,
+        std::vector<std::shared_ptr<JobEntry>>,
+        CompareJob>;
 
-	void Work() 
-	{
-		while (true) 
-		{
-			JobEntry jobEntry;
-			{
-				std::unique_lock<std::mutex> lock(m_Mutex);
-				m_Condition.wait(lock, [this] 
-					{
-					return !m_JobQueue.empty() || m_Stop;
-					});
+    void Start(unsigned int threadCount) noexcept 
+    {
+        for (unsigned int i = 0; i < threadCount; i++)
+            m_Workers.emplace_back([this, i] { Worker(i); });
+    }
 
-				if (m_Stop && m_JobQueue.empty())
-					return;
+    void Enqueue(std::shared_ptr<JobEntry> entry) noexcept 
+    {
+        static thread_local std::mt19937 rng(std::random_device{}());
+        std::uniform_int_distribution<size_t> dist(0, m_WorkerCount - 1);
+        size_t idx = dist(rng);
 
-				jobEntry = std::move(const_cast<JobEntry&>(m_JobQueue.top()));
-				m_JobQueue.pop();
-				m_ActiveJobCount++;
-			}
+        {
+            std::lock_guard<std::mutex> lock(*m_QueueMutexes[idx]);
+            m_Queues[idx].push(entry);
+        }
+        m_GlobalCondition.notify_one();
+    }
 
-			jobEntry.job();
-			jobEntry.promise.set_value(); // signal future completion
+    bool AllQueuesEmpty() 
+    {
+        for (auto& q : m_Queues)
+            if (!q.empty()) return false;
+        return true;
+    }
 
-			m_ActiveJobCount--;
-			m_Condition.notify_all();
-		}
-	}
+    void Worker(size_t id) 
+    {
+        while (!m_Stop) {
+            std::shared_ptr<JobEntry> jobEntry;
 
-	unsigned int m_WorkerCount;
-	std::priority_queue<JobEntry, std::vector<JobEntry>, CompareJob> m_JobQueue;
-	std::vector<std::thread> m_Workers;
-	std::mutex m_Mutex;
-	std::condition_variable m_Condition;
-	std::atomic<bool> m_Stop;
-	std::atomic<int> m_ActiveJobCount;
+            // Try local queue
+            {
+                std::lock_guard<std::mutex> lock(*m_QueueMutexes[id]);
+                if (!m_Queues[id].empty()) 
+                {
+                    jobEntry = m_Queues[id].top();
+                    m_Queues[id].pop();
+                    m_ActiveJobCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+
+            // Task stealing
+            if (!jobEntry) 
+            {
+                for (size_t i = 0; i < m_WorkerCount; i++) 
+                {
+                    if (i == id) continue;
+                    std::lock_guard<std::mutex> lock(*m_QueueMutexes[i]);
+                    if (!m_Queues[i].empty()) 
+                    {
+                        jobEntry = m_Queues[i].top();
+                        m_Queues[i].pop();
+                        m_ActiveJobCount.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    }
+                }
+            }
+
+            if (!jobEntry) 
+            {
+                std::unique_lock<std::mutex> lock(m_GlobalMutex);
+                m_GlobalCondition.wait_for(lock, std::chrono::milliseconds(1));
+                continue;
+            }
+
+            // Execute job
+            jobEntry->job();
+
+            if (!jobEntry->finished.exchange(true)) 
+            {
+                jobEntry->promise.set_value();
+                // Trigger dependents
+                std::lock_guard<std::mutex> depLock(jobEntry->depMutex);
+                for (auto& dep : jobEntry->dependents) 
+                {
+                    if (--dep->remainingDeps == 0)
+                        Enqueue(dep);
+                }
+            }
+
+            m_ActiveJobCount.fetch_sub(1, std::memory_order_relaxed);
+            m_GlobalCondition.notify_all();
+        }
+    }
+
+    unsigned int m_WorkerCount;
+    std::vector<std::thread> m_Workers;
+    std::vector<QueueType> m_Queues;
+    std::vector<std::unique_ptr<std::mutex>> m_QueueMutexes;
+    std::mutex m_GlobalMutex;
+    std::condition_variable m_GlobalCondition;
+    std::atomic<int> m_ActiveJobCount{ 0 };
+    std::atomic<bool> m_Stop;
 };
 
-} // namespace taskori 
+} // namespace taskori
 
-#endif // !TASKORI_H
-
-
-
-
+#endif // TASKORI_H
