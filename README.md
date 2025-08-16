@@ -4,7 +4,7 @@ Taskori is a single-header, dependency-aware, thread-safe job scheduler for C++.
 
 ## Features
 
-Single-header, minimal dependencies (<thread>, <mutex>, <queue>, <atomic>, <future>).
+Single-header, minimal dependencies.
 
 Supports job priorities.
 
