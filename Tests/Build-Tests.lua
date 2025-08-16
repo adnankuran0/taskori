@@ -5,12 +5,14 @@ project "Tests"
    targetdir "Binaries/%{cfg.buildcfg}"
    staticruntime "off"
 
-   files { "src/**.h", "src/**.cpp" }
+   files { "src/**.h", "src/**.cpp", "../Vendor/googletest/src/gtest-all.cc"}
 
    includedirs
    {
-      "src",
-	  "../include"
+        "src",
+	    "../include",
+        "../Vendor/googletest",
+        "../Vendor/googletest/include"
    }
 
    targetdir ("../Binaries/" .. OutputDir .. "/%{prj.name}")

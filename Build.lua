@@ -10,8 +10,5 @@ workspace "taskori"
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
-group "Sandbox"
-	include "Core/Build-Sandbox.lua"
-group "Tests"
-	include "Core/Build-Tests.lua"
-group ""
+include "Sandbox/Build-Sandbox.lua"
+include "Tests/Build-Tests.lua"
