@@ -1,4 +1,4 @@
-#ifndef TASKORI_H
+﻿#ifndef TASKORI_H
 #define TASKORI_H
 
 #include <thread>
@@ -8,6 +8,13 @@
 #include <queue>
 #include <vector>
 #include <atomic>
+
+//TODO:
+//Queue → priority queue / multiple queues
+//Job → dependency graph + optional priority
+//Workers → affinity / frame - sliced update
+//Submit → future or callback support
+//Monitor → job profiling and debugging
 
 namespace taskori {
 
