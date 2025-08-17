@@ -27,7 +27,7 @@ public:
         std::vector<std::shared_ptr<JobEntry>> dependents;
         std::promise<void> promise;
         std::atomic<bool> finished{ false };
-        std::mutex depMutex; // dependents thread-safe
+        std::mutex depMutex; // thread safe dependents
     };
 
     explicit Scheduler(unsigned int workerCount = std::thread::hardware_concurrency())
@@ -72,7 +72,8 @@ public:
     void WaitAll() noexcept 
     {
         std::unique_lock<std::mutex> lock(m_GlobalMutex);
-        m_GlobalCondition.wait(lock, [this] {
+        m_GlobalCondition.wait(lock, [this] 
+            {
             return m_ActiveJobCount.load() == 0 && AllQueuesEmpty();
             });
     }
@@ -131,7 +132,8 @@ private:
 
     void Worker(size_t id) 
     {
-        while (!m_Stop) {
+        while (!m_Stop) 
+        {
             std::shared_ptr<JobEntry> jobEntry;
 
             // Try local queue

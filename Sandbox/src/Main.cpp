@@ -2,7 +2,8 @@
 #include <iostream>
 #include <chrono>
 
-int main() {
+int main() 
+{
     taskori::Scheduler sched(4);
 
     auto job1 = sched.Submit([] {
@@ -13,7 +14,7 @@ int main() {
     auto job2 = sched.Submit([] {
         std::cout << "Job 2 running\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }, 2, { job1 }); // job1 baðýmlýlýðý
+        }, 2, { job1 }); // depends on job 1
 
     auto job3 = sched.Submit([] {
         std::cout << "Job 3 running\n";

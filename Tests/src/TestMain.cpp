@@ -6,7 +6,8 @@
 
 using namespace taskori;
 
-TEST(SchedulerTest, SingleJobExecution) {
+TEST(SchedulerTest, SingleJobExecution) 
+{
     taskori::Scheduler sched(2);
     std::atomic<bool> executed{ false };
 
@@ -16,7 +17,8 @@ TEST(SchedulerTest, SingleJobExecution) {
     EXPECT_TRUE(executed);
 }
 
-TEST(SchedulerTest, MultipleJobsExecution) {
+TEST(SchedulerTest, MultipleJobsExecution) 
+{
     taskori::Scheduler sched(4);
     std::atomic<int> counter{ 0 };
 
@@ -27,7 +29,8 @@ TEST(SchedulerTest, MultipleJobsExecution) {
     EXPECT_EQ(counter.load(), 10);
 }
 
-TEST(SchedulerTest, JobDependencies) {
+TEST(SchedulerTest, JobDependencies) 
+{
     taskori::Scheduler sched(3);
     std::vector<int> order;
 
@@ -43,7 +46,8 @@ TEST(SchedulerTest, JobDependencies) {
     EXPECT_EQ(order[2], 3);
 }
 
-TEST(SchedulerTest, JobPriorities) {
+TEST(SchedulerTest, JobPriorities) 
+{
     taskori::Scheduler sched(2);
     std::vector<int> order;
 
@@ -57,11 +61,13 @@ TEST(SchedulerTest, JobPriorities) {
     EXPECT_EQ(order[1], 1);
 }
 
-TEST(SchedulerTest, WaitAllBlocksUntilJobsComplete) {
+TEST(SchedulerTest, WaitAllBlocksUntilJobsComplete) 
+{
     taskori::Scheduler sched(2);
     std::atomic<bool> jobDone{ false };
 
-    auto job = sched.Submit([&]() {
+    auto job = sched.Submit([&]() 
+        {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         jobDone = true;
         });
@@ -74,7 +80,8 @@ TEST(SchedulerTest, WaitAllBlocksUntilJobsComplete) {
     EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count(), 100);
 }
 
-TEST(SchedulerTest, ShutdownSafety) {
+TEST(SchedulerTest, ShutdownSafety) 
+{
     taskori::Scheduler sched(4);
 
     for (int i = 0; i < 20; ++i)
@@ -84,7 +91,8 @@ TEST(SchedulerTest, ShutdownSafety) {
     SUCCEED();
 }
 
-TEST(SchedulerTest, JobExceptionDoesNotCrash) {
+TEST(SchedulerTest, JobExceptionDoesNotCrash) 
+{
     taskori::Scheduler sched(2);
 
     auto job = sched.Submit([]() { throw std::runtime_error("Test"); });
@@ -93,7 +101,8 @@ TEST(SchedulerTest, JobExceptionDoesNotCrash) {
     EXPECT_NO_THROW(sched.WaitAll());
 }
 
-TEST(SchedulerTest, TaskStealing) {
+TEST(SchedulerTest, TaskStealing) 
+{
     taskori::Scheduler sched(4);
     std::atomic<int> counter{ 0 };
 
@@ -105,7 +114,8 @@ TEST(SchedulerTest, TaskStealing) {
     EXPECT_EQ(counter.load(), 20);
 }
 
-TEST(SchedulerTest, HighLoadStressTest) {
+TEST(SchedulerTest, HighLoadStressTest) 
+{
     taskori::Scheduler sched(8);
     const int JOB_COUNT = 1000;
     std::atomic<int> counter{ 0 };
@@ -117,7 +127,8 @@ TEST(SchedulerTest, HighLoadStressTest) {
     EXPECT_EQ(counter.load(), JOB_COUNT);
 }
 
-TEST(SchedulerTest, ComplexDependencyGraph) {
+TEST(SchedulerTest, ComplexDependencyGraph) 
+{
     taskori::Scheduler sched(4);
     std::vector<int> executed;
 
@@ -134,11 +145,13 @@ TEST(SchedulerTest, ComplexDependencyGraph) {
     EXPECT_EQ(executed[3], 4);
 }
 
-TEST(SchedulerTest, NestedJobs) {
+TEST(SchedulerTest, NestedJobs) 
+{
     taskori::Scheduler sched(2);
     std::atomic<int> counter{ 0 };
 
-    auto outer = sched.Submit([&]() {
+    auto outer = sched.Submit([&]() 
+        {
         counter.fetch_add(1, std::memory_order_relaxed);
         sched.Submit([&]() { counter.fetch_add(1, std::memory_order_relaxed); });
         });
